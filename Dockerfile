@@ -1,13 +1,9 @@
-# ----- Render single-file service: Playwright + Node -----
+# ----- Render single-file service: Playwright + Node (no apt, non-interactive) -----
 FROM mcr.microsoft.com/playwright:v1.47.0-jammy
 
 WORKDIR /app
 
-# (Optional) basic packages; keep image slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && \
-    rm -rf /var/lib/apt/lists/*
-
-# Write the whole server in one go
+# Write the whole server in one go (unchanged from your version)
 RUN cat > /app/server.js <<'EOF'
 const http = require("http");
 const crypto = require("crypto");
@@ -225,6 +221,7 @@ EOF
 
 ENV NODE_ENV=production
 ENV PORT=10000
+# Set API_KEY in Render’s Environment (optional)
 EXPOSE 10000
 
 # Simple healthcheck hits /health
