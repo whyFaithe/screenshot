@@ -32,7 +32,8 @@ async function getBrowser(){
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
-        "--disable-features=IsolateOrigins,site-per-process"
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-blink-features=AutomationControlled"
       ]
     });
   }
@@ -50,13 +51,49 @@ function isValidHttpUrl(u){ try{ const x=new URL(u); return /^https?:$/.test(x.p
 
 async function applyStealth(page, {acceptLang="en-US,en;q=0.9", tz="America/Chicago"} = {}){
   await page.addInitScript(() => {
-    Object.defineProperty(navigator, "webdriver", {get: () => false});
-    window.chrome = window.chrome || { runtime: {} };
+    // Hide webdriver
+    Object.defineProperty(navigator, "webdriver", {get: () => undefined});
+    
+    // Fix chrome object
+    window.chrome = {
+      runtime: {},
+      loadTimes: function() {},
+      csi: function() {},
+      app: {}
+    };
+    
+    // Fix permissions
     const origQuery = navigator.permissions.query;
     navigator.permissions.query = (p)=> p && p.name==="notifications" ? Promise.resolve({state: Notification.permission}) : origQuery(p);
-    Object.defineProperty(navigator, "plugins", { get: () => [1,2,3] });
+    
+    // Fix plugins
+    Object.defineProperty(navigator, "plugins", { 
+      get: () => [
+        {name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format"},
+        {name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: ""},
+        {name: "Native Client", filename: "internal-nacl-plugin", description: ""}
+      ] 
+    });
+    
+    // Fix languages
     Object.defineProperty(navigator, "languages", { get: () => ["en-US","en"] });
+    
+    // Fix platform
+    Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+    
+    // Fix headless detection
+    Object.defineProperty(navigator, "maxTouchPoints", { get: () => 0 });
+    
+    // Override toString to hide proxy
+    const oldToString = Function.prototype.toString;
+    Function.prototype.toString = function() {
+      if (this === navigator.permissions.query) {
+        return "function query() { [native code] }";
+      }
+      return oldToString.call(this);
+    };
   });
+  
   try { await page.emulateMedia({ colorScheme: "light" }); } catch {}
   try {
     await page.context().addInitScript(tzName => {
@@ -74,7 +111,8 @@ async function applyStealth(page, {acceptLang="en-US,en;q=0.9", tz="America/Chic
       "Sec-Fetch-Site": "none",
       "Sec-Fetch-Mode": "navigate",
       "Sec-Fetch-User": "?1",
-      "Sec-Fetch-Dest": "document"
+      "Sec-Fetch-Dest": "document",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
     });
   } catch {}
 }
@@ -120,11 +158,15 @@ async function handleScreenshot(qs, res){
     context = await browser.newContext({
       viewport: { width: w, height: h },
       deviceScaleFactor: 1,
-      userAgent: ua || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+      userAgent: ua || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       bypassCSP: true,
       ignoreHTTPSErrors: true,
       javaScriptEnabled: true,
-      locale: (acceptLang.split(",")[0] || "en-US")
+      locale: (acceptLang.split(",")[0] || "en-US"),
+      hasTouch: false,
+      isMobile: false,
+      colorScheme: "light",
+      acceptDownloads: false
     });
 
     if (blockAds){
@@ -145,7 +187,7 @@ async function handleScreenshot(qs, res){
     await gotoWithRetry(page, target, { waitUntil, timeoutMs });
     if (delay) await page.waitForTimeout(delay);
 
-    // Don’t let web fonts block the shot forever
+    // Don't let web fonts block the shot forever
     try {
       await page.evaluate(() => {
         const s = document.createElement('style');
