@@ -1,9 +1,23 @@
-# ----- Render single-file service: Playwright + Node (no apt, non-interactive) -----
+# ----- Render single-file service: Playwright + Node -----
 FROM mcr.microsoft.com/playwright:v1.47.0-jammy
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NODE_ENV=production
+ENV PORT=10000
+# Tell the npm package to use the preinstalled browsers in this base image
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 WORKDIR /app
 
-# Write the whole server in one go (unchanged from your version)
+# (Optional) certs; keep image slim (omit tzdata to avoid prompts)
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Minimal npm setup just to provide the 'playwright' module.
+RUN npm init -y && npm install --omit=dev playwright@1.47.0
+
+# Write the whole server in one go
 RUN cat > /app/server.js <<'EOF'
 const http = require("http");
 const crypto = require("crypto");
@@ -55,20 +69,15 @@ function isValidHttpUrl(u){
 /* -------------------- Stealth patches -------------------- */
 async function applyStealth(page, {acceptLang="en-US,en;q=0.9", tz="America/Chicago"} = {}){
   await page.addInitScript(() => {
-    // webdriver -> false
     Object.defineProperty(navigator, "webdriver", {get: () => false});
-    // chrome object
     window.chrome = window.chrome || { runtime: {} };
-    // permissions
     const origQuery = window.navigator.permissions.query;
     window.navigator.permissions.query = (p) =>
       p && p.name === "notifications"
         ? Promise.resolve({ state: Notification.permission })
         : origQuery(p);
-    // plugins & languages
     Object.defineProperty(navigator, "plugins", { get: () => [1,2,3] });
     Object.defineProperty(navigator, "languages", { get: () => ["en-US","en"] });
-    // hairline fix / media codecs hints (lightweight)
     const _canPlayType = HTMLMediaElement.prototype.canPlayType;
     HTMLMediaElement.prototype.canPlayType = function(type){
       if (/video\/webm; codecs="vp9"/i.test(type)) return "probably";
@@ -76,7 +85,6 @@ async function applyStealth(page, {acceptLang="en-US,en;q=0.9", tz="America/Chic
     };
   });
 
-  // Locale & timezone hints
   try { await page.emulateMedia({ colorScheme: "light" }); } catch {}
   try { await page.context().addInitScript(tzName => {
     try {
@@ -86,7 +94,6 @@ async function applyStealth(page, {acceptLang="en-US,en;q=0.9", tz="America/Chic
     } catch {}
   }, tz); } catch {}
 
-  // Accept-Language + realistic headers via extra headers
   try {
     await page.context().setExtraHTTPHeaders({
       "Accept-Language": acceptLang,
@@ -129,7 +136,7 @@ async function handleScreenshot(qs, res){
   const blockAds = (qs.get("blockAds") || "0") === "1";
   const format   = (qs.get("format") || "png").toLowerCase(); // "png" | "json"
   const ua       = (qs.get("ua") || "").trim();
-  const stealth  = (qs.get("stealth") || "1") !== "0";        // default ON
+  const stealth  = (qs.get("stealth") || "1") !== "0";
   const acceptLang = (qs.get("al") || "en-US,en;q=0.9").trim();
   const tz       = (qs.get("tz") || "America/Chicago").trim();
 
@@ -198,7 +205,6 @@ const server = http.createServer(async (req, res) => {
   try{
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    // Optional API key
     if (API_KEY){
       const key = req.headers["x-api-key"];
       if (key !== API_KEY) return unauthorized(res);
@@ -219,9 +225,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => console.log("screenshot api listening on :"+PORT));
 EOF
 
-ENV NODE_ENV=production
-ENV PORT=10000
-# Set API_KEY in Render’s Environment (optional)
 EXPOSE 10000
 
 # Simple healthcheck hits /health
